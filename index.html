@@ -111,12 +111,9 @@
             const messageText = document.getElementById('messageText');
             const closeMessageBox = document.getElementById('closeMessageBox');
 
-            // --- IMPORTANT: API Key is now set here ---
-            // This API key needs to be configured correctly in Google Cloud Console
-            // for public web access. Check "API Restrictions" and "HTTP referrers" for your key.
-            const API_KEY = "AIzaSyDMotjubuT252Ips9PWtUZ_AuRVPXmsLUc";
-            // --- End API Key ---
-            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`;
+            // --- IMPORTANT: API_URL now points to your local Flask backend ---
+            const API_URL = `/classify`; // This is the endpoint on your Flask server
+            // --- No API_KEY needed here, as the Flask backend handles it securely ---
 
             // Simulated list of Nigerian news sites for display purposes
             const dummySites = [
@@ -156,131 +153,54 @@
                 let aiClassification = "N/A";
                 let confidenceScore = 0.0;
                 let simulatedMatchingSites = []; // Initialize here to be available in finally block
+                let timeTaken = 0; // Initialize timeTaken here
 
                 try {
-                    // Prepare the prompt for the Gemini API
-                    const prompt = `Classify the following Nigerian news content as either "REAL NEWS" or "FAKE NEWS".
-                    Focus on common characteristics of misinformation like sensationalism, unverified claims, conspiracy theories, or clear factual inaccuracies often found in fake news, especially in a political context. If it sounds like legitimate reporting, classify it as REAL NEWS.
-                    
-                    Respond ONLY with "REAL NEWS" or "FAKE NEWS", followed by a confidence score (0.0 to 1.0) in parentheses. For example: "FAKE NEWS (0.95)" or "REAL NEWS (0.88)".
-
-                    News Content: "${textInput}"`;
-
-                    const payload = {
-                        contents: [{ role: "user", parts: [{ text: prompt }] }],
-                        generationConfig: {
-                            temperature: 0.2, // Keep temperature low for deterministic classification
-                            topP: 0.95,
-                            topK: 40,
-                            responseMimeType: "text/plain" // Request plain text response
-                        }
-                    };
-
+                    // Send text to your Flask backend
                     const response = await fetch(API_URL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
+                        body: JSON.stringify({ text: textInput })
                     });
 
                     const result = await response.json();
-                    console.log("Gemini API raw response:", result); // Log the full response for debugging
+                    console.log("Backend response:", result); // Log the full response from your Flask server
 
-                    if (result.candidates && result.candidates.length > 0 &&
-                        result.candidates[0].content && result.candidates[0].content.parts &&
-                        result.candidates[0].content.parts.length > 0) {
-                        
-                        const textResponse = result.candidates[0].content.parts[0].text;
-                        // Updated regex to correctly parse 1.0 as a confidence score (e.g., (0.95) or (1.0))
-                        const match = textResponse.match(/(REAL NEWS|FAKE NEWS)\s*\(([\d\.]+)\)/i);
-                        if (match) {
-                            aiClassification = match[1].toUpperCase();
-                            confidenceScore = parseFloat(match[2]);
+                    if (response.ok) { // Check if HTTP status is 2xx
+                        aiClassification = result.ai_classification || "N/A";
+                        confidenceScore = result.confidence_score || 0.0;
+                        timeTaken = parseFloat(result.time_spent); // Get actual time from backend
+                        simulatedMatchingSites = result.matching_sites_list || [];
+
+                        if (aiClassification === "REAL" || aiClassification === "FAKE") {
+                            // Valid classification
                         } else {
-                            aiClassification = "UNCLEAR (AI format error)";
-                            confidenceScore = 0.0;
-                            console.error("AI response format unexpected:", textResponse);
-                            showMessage("AI response format was unexpected. See console for details.");
+                            // Handle cases where AI might return unexpected classifications
+                            console.error("AI returned unexpected classification:", aiClassification);
+                            showMessage(`AI returned unexpected classification: ${aiClassification}. See console.`);
                         }
+
                     } else {
-                        aiClassification = "AI Response Empty";
+                        // Handle errors returned from the Flask backend (e.g., 400, 500)
+                        console.error("Error from backend:", result.error || "Unknown error");
+                        showMessage(`Backend Error: ${result.error || "Unknown error"}. Check server logs.`);
+                        aiClassification = `Backend Error`;
                         confidenceScore = 0.0;
-                        // Check if a prompt feedback block exists, it might indicate safety filters
-                        if (result.promptFeedback && result.promptFeedback.safetyRatings) {
-                            console.warn("AI response empty due to safety concerns:", result.promptFeedback.safetyRatings);
-                            showMessage("AI analysis could not be completed due to content safety policies. Please try different wording.");
-                        } else if (result.error && result.error.message) {
-                             console.error("API error received:", result.error.message);
-                             showMessage(`API Error: ${result.error.message}. Check your API key restrictions or quota.`);
-                        } else {
-                            console.error("AI response candidates empty or malformed (unknown reason):", result);
-                            showMessage("AI analysis failed for an unknown reason. See console for more info.");
-                        }
                     }
 
                 } catch (error) {
-                    aiClassification = `AI Error: ${error.message}`;
+                    aiClassification = `Network/Server Error: ${error.message}`;
                     confidenceScore = 0.0;
-                    console.error("Error calling Gemini API (network/fetch error):", error);
-                    showMessage(`Network error or API call failed: ${error.message}. Check your internet connection.`);
+                    console.error("Error connecting to backend:", error);
+                    showMessage(`Network/Server Error: ${error.message}. Ensure your Flask server is running.`);
                 } finally {
-                    // This block runs whether there's an error or not
-                    const endTime = performance.now(); // End timer
-                    const timeTaken = ((endTime - startTime) / 1000).toFixed(2); // Convert to seconds
-
-                    // Simulate site checking (Illustrative only, NOT real web scraping)
+                    // Update results display regardless of success or failure
                     const totalSitesChecked = dummySites.length;
-                    const lowerInput = headlineInput.value.trim().toLowerCase(); // Use current input for simulation
 
-                    // Reset simulatedMatchingSites if an error occurred in AI classification
-                    if (aiClassification === "AI Response Empty" || aiClassification.startsWith("AI Error:") || aiClassification.startsWith("UNCLEAR")) {
-                         simulatedMatchingSites = []; // Clear matches if AI failed
-                    } else {
-                        // Heuristic for dummy matches: more likely to match if classified as FAKE by the AI,
-                        // or if specific keywords are present. This is for visual demo purposes only.
-                        if (aiClassification === "FAKE NEWS" && confidenceScore > 0.6) {
-                            // If AI is confident it's fake, simulate more matching sites
-                            const numMatches = Math.floor(Math.random() * (dummySites.length / 3)) + 1; // 1 to 1/3 of total sites
-                            for (let i = 0; i < numMatches; i++) {
-                                simulatedMatchingSites.push(dummySites[Math.floor(Math.random() * dummySites.length)]);
-                            }
-                        } else if (aiClassification === "REAL NEWS" && confidenceScore < 0.5) {
-                            // If AI thinks it's real but with low confidence, maybe a couple of matches
-                            const numMatches = Math.floor(Math.random() * 2); // 0 or 1 match
-                            for (let i = 0; i < numMatches; i++) {
-                                simulatedMatchingSites.push(dummySites[Math.floor(Math.random() * dummySites.length)]);
-                            }
-                        }
-                        
-                        // Add matches based on keywords regardless of AI classification
-                        if (lowerInput.includes("election") || lowerInput.includes("president") || lowerInput.includes("governor")) {
-                            if (lowerInput.includes("daily trust")) {
-                                simulatedMatchingSites.push("Daily Trust");
-                            }
-                            if (lowerInput.includes("premium times")) {
-                                simulatedMatchingSites.push("Premium Times");
-                            }
-                            const politicalSources = ["Channels Television", "The Nation", "Arise News", "Vanguard"];
-                            if (Math.random() < 0.4 && simulatedMatchingSites.length < 4) {
-                                simulatedMatchingSites.push(politicalSources[Math.floor(Math.random() * politicalSources.length)]);
-                            }
-                        }
-                        
-                        if (lowerInput.includes("scandal") || lowerInput.includes("lies") || lowerInput.includes("unverified") || lowerInput.includes("breaking")) {
-                            const numExtraMatches = Math.floor(Math.random() * 2); // 0 to 1 extra matches
-                            for (let i = 0; i < numExtraMatches; i++) {
-                                 if (simulatedMatchingSites.length < 5) { // Cap at 5 total for display
-                                    simulatedMatchingSites.push(dummySites[Math.floor(Math.random() * dummySites.length)]);
-                                }
-                            }
-                        }
-                        simulatedMatchingSites = [...new Set(simulatedMatchingSites)]; // Remove duplicates
-                    }
-                    
-                    // Update results display
-                    aiClassificationSpan.textContent = aiClassification;
-                    aiClassificationSpan.className = `font-semibold ${aiClassification.includes('FAKE') ? 'text-red-600' : (aiClassification.includes('REAL') ? 'text-green-600' : 'text-gray-500')}`;
+                    classificationSpan.textContent = aiClassification;
+                    classificationSpan.className = `font-semibold ${aiClassification.includes('FAKE') ? 'text-red-600' : (aiClassification.includes('REAL') ? 'text-green-600' : 'text-gray-500')}`;
                     confidenceScoreSpan.textContent = confidenceScore.toFixed(2);
-                    timeSpentSpan.textContent = `${timeTaken} seconds`;
+                    timeSpentSpan.textContent = `${timeTaken.toFixed(2)} seconds`;
                     totalSitesSpan.textContent = totalSitesChecked;
                     matchingSitesCountSpan.textContent = simulatedMatchingSites.length;
 
@@ -302,7 +222,7 @@
                     loadingSpinner.classList.add('hidden');
                     buttonText.textContent = "Check News Veracity";
                     checkButton.disabled = false;
-                    resultsDiv.classList.remove('hidden'); // Show results section regardless of success or failure
+                    resultsDiv.classList.remove('hidden'); // Show results section
                 }
             });
         });
